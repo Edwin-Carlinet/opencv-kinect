@@ -1,50 +1,74 @@
 //#include <opencv2/highgui/highgui.hpp>
 
+#include "calibrate-qt.hpp"
 
 #include <QtGui>
 #include <QtWidgets>
-
+#include <iostream>
 // OpenCV includes
 
 #include <opencv2/core.hpp>
+#include <opencv2/imgproc.hpp>
+#include <opencv2/calib3d.hpp>
 #include "capture-cv.hpp"
 #include "calibration-utils.hpp"
 #include "utils.hpp"
 
 //using namespace cv;
 
-
-class QCalibrationApp : public QMainWindow
-{
+class QFullscreenView : public QWidget {
     public:
 
-    QCalibrationApp(QWidget* parent = nullptr);
+    QFullscreenView(const QImage* image, QWidget* parent = nullptr) : QWidget(parent)
+    {
+        this->setWindowFlags(Qt::Window);
+        this->setWindowState(Qt::WindowFullScreen);
 
+        m_scene = new QGraphicsScene();
+        m_item = new QGraphicsPixmapItem();
+        if (image != nullptr)
+            m_item->setPixmap(QPixmap::fromImage(*image));
+        m_scene->addItem(m_item);
+        m_view = new QGraphicsView(m_scene);
+        m_view->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 
-
-    void peek_frame() {
-        capture.next_loop_event();
+        QLayout* layout = new QHBoxLayout();
+        layout->addWidget(m_view);
+        layout->setAlignment(m_view, Qt::AlignLeft);
+        layout->setContentsMargins(0, 0, 0, 0);
+        this->setLayout(layout);
     }
 
-    void recompute_homography() {
-        if (rgb->pixmap().isNull())
-            return;
-
-        int coordinates[8];
-        for (int i = 0; i < 4; ++i) {
-            coordinates[2*i] = controls[i]->scenePos().x();
-            coordinates[2*i+1] = controls[i]->scenePos().y();
-        }
-        this->H = unwrap_estimate(coordinates, rgb->pixmap().width(), rgb->pixmap().height());
+    void resizeEvent(QResizeEvent* event) override {
+        QWidget::resizeEvent(event);
+        m_scene->setSceneRect(m_item->boundingRect());
+        m_view->resize(this->size());
+        m_view->fitInView(m_item, Qt::KeepAspectRatio);
     }
+
+    void setImage(const QImage& image) {
+        m_item->setPixmap(QPixmap::fromImage(image));
+        m_scene->setSceneRect(m_item->boundingRect());
+        m_view->fitInView(m_item, Qt::KeepAspectRatio);
+    }
+
 
     private:
+        QGraphicsScene* m_scene;
+        QGraphicsPixmapItem* m_item;
+        QGraphicsView* m_view;
+};
 
-    struct QControl : public QGraphicsRectItem {
-        QCalibrationApp* parent;
+constexpr static int CONTROL_SIZE = 10;
 
-        QControl(QCalibrationApp* parent, int x, int y) : QGraphicsRectItem(0, 0, 10, 10) {
-            setBrush(QBrush(Qt::red));
+
+class QControl : public QGraphicsRectItem
+ {
+    QCalibrationApp* parent;
+
+    public:
+        QControl(QCalibrationApp* parent,  Qt::GlobalColor color, int x, int y) : QGraphicsRectItem(0, 0, CONTROL_SIZE, CONTROL_SIZE) {
+            setBrush(QBrush(color));
             setFlags(QGraphicsItem::ItemIsMovable | QGraphicsItem::ItemSendsGeometryChanges);
             this->parent = parent;
             this->setPos(x, y);
@@ -56,7 +80,12 @@ class QCalibrationApp : public QMainWindow
             }
             return QGraphicsRectItem::itemChange(change, value);
         }
-    };
+};
+
+struct QCalibrationApp::QCalibrationAppImpl
+{
+    QFullscreenView* m_calibration_view = nullptr;
+    QFullscreenView* m_output_view = nullptr;
 
     QGraphicsView* lview;
     QGraphicsView* cview;
@@ -69,107 +98,251 @@ class QCalibrationApp : public QMainWindow
     QGraphicsPixmapItem* depth;
     QTimer* timer;
     CVKinectCapture capture;
+    QCheckBox* m_output_choice;
+    QCheckBox* m_output_depth;
 
     // Control
-    QControl* controls[4];
+    std::vector<QControl*> m_control_box;
+    std::vector<QControl*> m_control_mire;
+    std::vector<QControl*> m_control_depth;
 
-    cv::Mat H; // Homography matrix
+    cv::Mat H1, H2; // Homography matrix
 
+    bool calibrate_depth = false;
+    bool mirror_output = false;
+    int min_depth, max_depth;
 };
+
+
+
+void QCalibrationApp::peek_frame()
+{
+    m_impl->capture.next_loop_event();
+}
+
+void QCalibrationApp::recompute_homography()
+{
+    if (m_impl->rgb->pixmap().isNull())
+        return;
+
+    std::vector<cv::Point2f> coordinates_box(4);
+    std::vector<cv::Point2f> coordinates_mire(4);
+
+    for (int i = 0; i < 4; ++i)
+    {
+        coordinates_box[i].x = m_impl->m_control_box[i]->scenePos().x() + CONTROL_SIZE / 2;
+        coordinates_box[i].y = m_impl->m_control_box[i]->scenePos().y() + CONTROL_SIZE / 2;
+        coordinates_mire[i].x = m_impl->m_control_mire[i]->scenePos().x() + CONTROL_SIZE / 2;
+        coordinates_mire[i].y = m_impl->m_control_mire[i]->scenePos().y() + CONTROL_SIZE / 2;
+    }
+    int w = m_impl->rgb->pixmap().width();
+    int h = m_impl->rgb->pixmap().height();
+
+    m_impl->H1 = unwrap_estimate(coordinates_box, w, h);
+    auto H2 = unwrap_estimate(coordinates_mire, w, h, m_impl->mirror_output);
+    m_impl->H2 = H2 * m_impl->H1.inv();
+}
+
+void QCalibrationApp::onCalibrationMenuChanged(int index)
+{
+    std::ranges::for_each(m_impl->m_control_box, [](auto &c) { c->hide(); });
+    std::ranges::for_each(m_impl->m_control_mire, [](auto &c) { c->hide(); });
+    std::ranges::for_each(m_impl->m_control_depth, [](auto &c) { c->hide(); });
+    m_impl->m_calibration_view->hide();
+
+    switch (index)
+    {
+    case 0:
+        std::ranges::for_each(m_impl->m_control_box, [](auto &c) { c->show(); });
+        break;
+    case 1:
+        std::ranges::for_each(m_impl->m_control_mire, [](auto &c) { c->show(); });
+        m_impl->m_calibration_view->show();
+        break;
+    case 2:
+        std::ranges::for_each(m_impl->m_control_depth, [](auto &c) { c->show(); });
+        break;
+    }
+}
+
+QCalibrationApp::~QCalibrationApp() = default;
 
 QCalibrationApp::QCalibrationApp(QWidget* parent) : QMainWindow(parent)
 {
-    rgb = new QGraphicsPixmapItem();
-    unwrapped = new QGraphicsPixmapItem();
-    depth = new QGraphicsPixmapItem();
+    m_impl = std::make_unique<QCalibrationAppImpl>();
+    m_impl->rgb = new QGraphicsPixmapItem();
+    m_impl->unwrapped = new QGraphicsPixmapItem();
+    m_impl->depth = new QGraphicsPixmapItem();
 
-    lview = new QGraphicsView();
-    cview = new QGraphicsView();
-    rview = new QGraphicsView();
-    lscene = new QGraphicsScene();
-    cscene = new QGraphicsScene();
-    rscene = new QGraphicsScene();
+    m_impl->lview = new QGraphicsView();
+    m_impl->cview = new QGraphicsView();
+    m_impl->rview = new QGraphicsView();
+    m_impl->lscene = new QGraphicsScene();
+    m_impl->cscene = new QGraphicsScene();
+    m_impl->rscene = new QGraphicsScene();
 
-    controls[0] = new QControl(this, 0, 0);
-    controls[1] = new QControl(this, 630, 0);
-    controls[2] = new QControl(this, 630, 470);
-    controls[3] = new QControl(this, 0, 470);
-
-    lscene->addItem(rgb);
-    for (int i = 0; i < 4; ++i) {
-        lscene->addItem(controls[i]);
-    }
-    cscene->addItem(unwrapped);
-    rscene->addItem(depth);
+    m_impl->m_control_box.resize(4);
+    m_impl->m_control_box[0] = new QControl(this, Qt::red, 10, 10);
+    m_impl->m_control_box[1] = new QControl(this, Qt::red, 630, 10);
+    m_impl->m_control_box[2] = new QControl(this, Qt::red, 630, 470);
+    m_impl->m_control_box[3] = new QControl(this, Qt::red, 10, 470);
     
-    lview->setScene(lscene);
-    cview->setScene(cscene);
-    rview->setScene(rscene);
+    m_impl->m_control_mire.resize(4);
+    m_impl->m_control_mire[0] = new QControl(this, Qt::green, 10, 10);
+    m_impl->m_control_mire[1] = new QControl(this, Qt::green, 630, 10);
+    m_impl->m_control_mire[2] = new QControl(this, Qt::green, 630, 470);
+    m_impl->m_control_mire[3] = new QControl(this, Qt::green, 10, 470);
 
-    lview->setMinimumSize(640, 480);
-    cview->setMinimumSize(640, 480);
-    rview->setMinimumSize(640, 480);
+    m_impl->m_control_depth.resize(2);
+    m_impl->m_control_depth[0] = new QControl(this, Qt::blue, 50, 230);
+    m_impl->m_control_depth[1] = new QControl(this, Qt::blue, 590, 230);
+
+    m_impl->lscene->addItem(m_impl->rgb);
+    m_impl->cscene->addItem(m_impl->unwrapped);
+    m_impl->rscene->addItem(m_impl->depth);
+
+    for (auto& controlers : {m_impl->m_control_box, m_impl->m_control_mire, m_impl->m_control_depth})
+        for (auto& c : controlers) {
+            m_impl->lscene->addItem(c);
+            c->hide();
+        }
+
+    m_impl->lview->setScene(m_impl->lscene);
+    m_impl->cview->setScene(m_impl->cscene);
+    m_impl->rview->setScene(m_impl->rscene);
+
+    m_impl->lview->setMinimumSize(640, 480);
+    m_impl->cview->setMinimumSize(640, 480);
+    m_impl->rview->setMinimumSize(640, 480);
 
     auto central = new QWidget();
     auto layout = new QHBoxLayout(central);
-    layout->addWidget(lview);
-    layout->addWidget(cview);
-    layout->addWidget(rview);
+    layout->addWidget(m_impl->lview);
+    layout->addWidget(m_impl->cview);
+    layout->addWidget(m_impl->rview);
     this->setCentralWidget(central);
 
 
 
-    capture.set_rgb_callback([&](cv::Mat& input, uint32_t timestamp) {
+    m_impl->capture.set_rgb_callback([&](cv::Mat& input, uint32_t timestamp) {
         QImage image(input.data, input.cols, input.rows, input.step, QImage::Format_RGB888);
-        rgb->setPixmap(QPixmap::fromImage(image));
-        lscene->setSceneRect(image.rect());
+        m_impl->rgb->setPixmap(QPixmap::fromImage(image));
+        m_impl->lscene->setSceneRect(image.rect());
 
-        cv::Mat unwraped = (H.empty()) ? input : unwrap(input, H);
-        QImage unwrapped_image(unwraped.data, unwraped.cols, unwraped.rows, unwraped.step, QImage::Format_RGB888);
-        unwrapped->setPixmap(QPixmap::fromImage(unwrapped_image));
-        cscene->setSceneRect(unwrapped_image.rect());
+        cv::Mat W = (m_impl->H1.empty()) ? input : unwrap(input, m_impl->H1);
+        cv::Mat transformed = (m_onRGBFrameChange) ? m_onRGBFrameChange(W) : W;
+        cv::Mat output = (m_impl->H2.empty()) ? transformed : unwrap(transformed, m_impl->H2);
+        {
+            auto& to_disp = m_impl->m_output_choice->isChecked() ? output : transformed;
+            QImage unwrapped_image(to_disp.data, to_disp.cols, to_disp.rows, to_disp.step, QImage::Format_RGB888);
+            m_impl->unwrapped->setPixmap(QPixmap::fromImage(unwrapped_image));
+            m_impl->cscene->setSceneRect(unwrapped_image.rect());
+        }
+        if (!m_impl->m_output_depth->isChecked())
+        {
+            QImage image(output.data, output.cols, output.rows, output.step, QImage::Format_RGB888);
+            m_impl->m_output_view->setImage(image);
+        }
     });
 
-    capture.set_depth_callback([&](cv::Mat& _depth, uint32_t timestamp) {
-        static auto cmap = get_cmap();
+    m_impl->capture.set_depth_callback([&](cv::Mat& depth, uint32_t timestamp) {
 
-        //std::cout << "Depth callback..." << std::endl;
-        cv::Mat_<uint16_t> depth16 = _depth;
+        if (!m_onDepthFrameChange)
+            return;
 
-        cv::Mat depth_rgb(depth16.rows, depth16.cols, CV_8UC3);
-        depth16.forEach([&](uint16_t& pixel, const int position[2]) {
-            rgb8 color = cmap[pixel];
-            depth_rgb.at<cv::Vec3b>(position[0], position[1]) = cv::Vec3b(color.r, color.g, color.b);
-        });
+        auto depth16 = (cv::Mat_<uint16_t>)depth;
 
-        if (!H.empty()) {
-            depth_rgb = unwrap(depth_rgb, H);
+
+        if (m_impl->calibrate_depth)
+        {
+            m_impl->calibrate_depth = false;
+            auto p1 = m_impl->m_control_depth[0]->scenePos();
+            auto p2 = m_impl->m_control_depth[1]->scenePos();
+            auto q1 = cv::Point2f(p1.x() + CONTROL_SIZE / 2, p1.y() + CONTROL_SIZE / 2);
+            auto q2 = cv::Point2f(p2.x() + CONTROL_SIZE / 2, p2.y() + CONTROL_SIZE / 2);
+            uint16_t d1 = depth16.at<uint16_t>(q1);
+            uint16_t d2 = depth16.at<uint16_t>(q2);
+            std::tie(m_impl->min_depth, m_impl->max_depth) = std::minmax(d1, d2);
+            std::cout << "Depth calibration: " << m_impl->min_depth << " " << m_impl->max_depth << std::endl;
         }
 
+        // 1. Wrap with H1
+        cv::Mat W = (m_impl->H1.empty()) ? depth : unwrap(depth, m_impl->H1);
+        cv::Mat depth_rgb = m_onDepthFrameChange(W, m_impl->min_depth, m_impl->max_depth);
+        cv::Mat out = (m_impl->H2.empty()) ? depth_rgb : unwrap(depth_rgb, m_impl->H2);
 
-        QImage image(depth_rgb.data, depth_rgb.cols, depth_rgb.rows, depth_rgb.step, QImage::Format_RGB888);
-        depth->setPixmap(QPixmap::fromImage(image));
-        rscene->setSceneRect(image.rect());
+
+        {
+            QImage image(depth_rgb.data, depth_rgb.cols, depth_rgb.rows, depth_rgb.step, QImage::Format_RGB888);
+            m_impl->depth->setPixmap(QPixmap::fromImage(image));
+            m_impl->rscene->setSceneRect(image.rect());
+        }
+
+        if (m_impl->m_output_depth->isChecked())
+        {
+            QImage image(out.data, out.cols, out.rows, out.step, QImage::Format_RGB888);
+            m_impl->m_output_view->setImage(image);
+        }
     });
 
     QTimer* timer = new QTimer(this);
     connect(timer, &QTimer::timeout, this, &QCalibrationApp::peek_frame);
     timer->start(10);
 
-    capture.start();
+    QToolBar *toolbar = this->addToolBar("Calibration");
+
+    QComboBox* calibrartion_menu = new QComboBox();
+    calibrartion_menu->addItem("Box");
+    calibrartion_menu->addItem("Mire");
+    calibrartion_menu->addItem("Depth");
+    m_impl->m_output_choice = new QCheckBox("Real output");
+    m_impl->m_output_depth = new QCheckBox("Output Depth Map");
+    auto zoom_slider = new QSlider(Qt::Horizontal);
+    zoom_slider->setMinimum(1);
+    zoom_slider->setMaximum(5);
+    zoom_slider->setMaximumWidth(100);
+
+
+    // Depth calibration button
+    auto depth_calibration_button = new QPushButton("Calibrate Depth");
+    // Mirror the output
+    auto mirror_button = new QCheckBox("Mirror");
+
+    toolbar->addWidget(m_impl->m_output_choice);
+    toolbar->addWidget(m_impl->m_output_depth);
+    toolbar->addWidget(calibrartion_menu);
+    toolbar->addWidget(zoom_slider); 
+    toolbar->addWidget(depth_calibration_button);
+    toolbar->addWidget(mirror_button);
+
+
+
+    connect(calibrartion_menu, &QComboBox::currentIndexChanged, this, &QCalibrationApp::onCalibrationMenuChanged);
+    connect(zoom_slider, &QSlider::valueChanged, [view=m_impl->lview](int value) {
+        view->resetTransform();
+        view->scale(value, value);
+    });
+    connect(depth_calibration_button, &QPushButton::clicked, [this]() {
+        m_impl->calibrate_depth = true;
+    });
+    connect(mirror_button, &QCheckBox::toggled, [this](bool checked) {
+        m_impl->mirror_output = checked;
+        recompute_homography();
+    });
+
+
+    m_impl->capture.start();
+
+    // Display the calibration image on the second screen
+    auto calibration_image = get_calibration_image(640, 480);
+    m_impl->m_calibration_view = new QFullscreenView(&calibration_image, this);
+    m_impl->m_calibration_view->move(QGuiApplication::screens().last()->geometry().topLeft());
+    m_impl->m_calibration_view->hide();
+
+    m_impl->m_output_view = new QFullscreenView(nullptr, this);
+    m_impl->m_output_view->move(QGuiApplication::screens().last()->geometry().topLeft());
+    m_impl->m_output_view->show();
 }
 
 
 
-
-
-int main(int argc, char** argv)
-{
-    // Create a QT application with a window and side-by-side RGB and Depth panel
-    QApplication app(argc, argv);
-
-    QCalibrationApp win;
-    win.show();
-
-    return app.exec();
-}

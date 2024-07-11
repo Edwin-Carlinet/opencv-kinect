@@ -26,10 +26,10 @@ target_link_libraries(glview PRIVATE libfreenect::libfreenect GLUT::GLUT OpenGL:
 add_executable(test-cv src/test-cv.cpp)
 
 add_library(opencv_kinect src/capture-cv.hpp src/capture-cv.cpp src/utils.cpp src/calibration-utils.hpp src/calibration-utils.cpp)
-target_link_libraries(opencv_kinect PRIVATE opencv_imgproc opencv_calib3d libfreenect::libfreenect)
+target_link_libraries(opencv_kinect PRIVATE opencv_imgproc opencv_calib3d libfreenect::libfreenect Qt6::Core)
 target_link_libraries(opencv_kinect PUBLIC opencv_core)
 
 target_link_libraries(test-cv PRIVATE opencv_highgui opencv_kinect)
 
-add_executable(calibration src/calibrate-qt.cpp)
+add_executable(calibration src/calibrate-qt.cpp src/calibrate-qt-main.cpp)
 target_link_libraries(calibration PRIVATE Qt6::Gui Qt6::Widgets opencv_kinect)

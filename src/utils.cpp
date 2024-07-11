@@ -2,11 +2,11 @@
 
 #include <cmath>
 
-std::vector<rgb8> get_cmap() {
+std::vector<rgb8> get_cmap(float gamma) {
     std::vector<rgb8> color_map(2048);
     for (int i = 0; i < 2048; ++i) {
         float v = i / 2048.f;
-		v = powf(v, 3)* 6;
+		v = powf(v, gamma) * 6;
 		int pval = v*6*256;
 
         int lb = pval & 0xff;

@@ -10,4 +10,5 @@ struct rgb8
     uint8_t b;
 };
 
-std::vector<rgb8> get_cmap();
+std::vector<rgb8> get_cmap(float gamma = 3.f);
+
