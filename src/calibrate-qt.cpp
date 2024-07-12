@@ -110,6 +110,7 @@ struct QCalibrationApp::QCalibrationAppImpl
 
     bool calibrate_depth = false;
     bool mirror_output = false;
+    bool saved_requested = false;
     int min_depth, max_depth;
     std::string preset_filename = "calibration.yml";
 };
@@ -326,6 +327,13 @@ QCalibrationApp::QCalibrationApp(QWidget* parent) : QMainWindow(parent)
 
         // 1. Wrap with H1
         cv::Mat W = (m_impl->H1.empty()) ? depth : unwrap(depth, m_impl->H1);
+
+        if (m_impl->saved_requested)
+        {
+            m_impl->saved_requested = false;
+            cv::imwrite("output.png", W);
+        }
+
         cv::Mat depth_rgb = m_onDepthFrameChange(W, m_impl->min_depth, m_impl->max_depth);
         cv::Mat out = (m_impl->H2.empty()) ? depth_rgb : unwrap(depth_rgb, m_impl->H2);
 
@@ -369,6 +377,9 @@ QCalibrationApp::QCalibrationApp(QWidget* parent) : QMainWindow(parent)
     auto save_presets_button = new QPushButton("Save Presets");
     // Load presets button
     auto load_presets_button = new QPushButton("Load Presets");
+    // Save output button
+    auto save_output_button = new QPushButton("Save Output");
+
 
 
     toolbar->addWidget(m_impl->m_output_choice);
@@ -379,6 +390,7 @@ QCalibrationApp::QCalibrationApp(QWidget* parent) : QMainWindow(parent)
     toolbar->addWidget(mirror_button);
     toolbar->addWidget(save_presets_button);
     toolbar->addWidget(load_presets_button);
+    toolbar->addWidget(save_output_button);
 
 
 
@@ -396,6 +408,7 @@ QCalibrationApp::QCalibrationApp(QWidget* parent) : QMainWindow(parent)
     });
     connect(save_presets_button, &QPushButton::clicked, this, (void(QCalibrationApp::*)()) &QCalibrationApp::savePresets);
     connect(load_presets_button, &QPushButton::clicked, this, (void(QCalibrationApp::*)()) &QCalibrationApp::loadPresets);
+    connect(save_output_button, &QPushButton::clicked, [this]() { this->m_impl->saved_requested = true; });
 
 
     m_impl->capture.start();

@@ -10,7 +10,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS TRUE)
 find_package(libfreenect REQUIRED)
 find_package(GLUT REQUIRED)
 find_package(OpenGL REQUIRED)
-find_package(OpenCV REQUIRED COMPONENTS core highgui imgproc calib3d)
+find_package(OpenCV REQUIRED COMPONENTS core highgui imgproc calib3d imgcodecs)
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets)
 find_package(pylene REQUIRED)
 
@@ -28,7 +28,7 @@ add_executable(test-cv src/test-cv.cpp)
 
 add_library(opencv_kinect src/capture-cv.hpp src/capture-cv.cpp src/utils.cpp src/calibration-utils.hpp src/calibration-utils.cpp)
 target_link_libraries(opencv_kinect PRIVATE opencv_imgproc opencv_calib3d libfreenect::libfreenect Qt6::Core)
-target_link_libraries(opencv_kinect PUBLIC opencv_core)
+target_link_libraries(opencv_kinect PUBLIC opencv_core opencv_imgcodecs)
 
 target_link_libraries(test-cv PRIVATE opencv_highgui opencv_kinect)
 
