@@ -21,6 +21,10 @@ class QCalibrationApp : public QMainWindow
             m_onRGBFrameChange = onRGBFrameChange;
         }
 
+        void setPresetName(std::string_view filename);
+        void savePresets();
+        void loadPresets();
+
 
     private:
         friend class QControl;

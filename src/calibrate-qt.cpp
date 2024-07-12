@@ -111,8 +111,66 @@ struct QCalibrationApp::QCalibrationAppImpl
     bool calibrate_depth = false;
     bool mirror_output = false;
     int min_depth, max_depth;
+    std::string preset_filename = "calibration.yml";
 };
 
+void QCalibrationApp::savePresets()
+{
+    cv::FileStorage fs(m_impl->preset_filename, cv::FileStorage::WRITE);
+    fs.write("H1", m_impl->H1);
+    fs.write("H2", m_impl->H2);
+    fs.write("min_depth", m_impl->min_depth);
+    fs.write("max_depth", m_impl->max_depth);
+
+    cv::Mat points_box(4, 2, CV_32F);
+    cv::Mat points_mire(4, 2, CV_32F);
+    cv::Mat points_depth(2, 2, CV_32F);
+    for (int i = 0; i < 4; ++i)
+    {
+        points_box.at<float>(i, 0) = m_impl->m_control_box[i]->scenePos().x() + CONTROL_SIZE / 2;
+        points_box.at<float>(i, 1) = m_impl->m_control_box[i]->scenePos().y() + CONTROL_SIZE / 2;
+        points_mire.at<float>(i, 0) = m_impl->m_control_mire[i]->scenePos().x() + CONTROL_SIZE / 2;
+        points_mire.at<float>(i, 1) = m_impl->m_control_mire[i]->scenePos().y() + CONTROL_SIZE / 2;
+    }
+    for (int i = 0; i < 2; ++i)
+    {
+        points_depth.at<float>(i, 0) = m_impl->m_control_depth[i]->scenePos().x() + CONTROL_SIZE / 2;
+        points_depth.at<float>(i, 1) = m_impl->m_control_depth[i]->scenePos().y() + CONTROL_SIZE / 2;
+    }
+    fs.write("points_box", points_box);
+    fs.write("points_mire", points_mire);
+    fs.write("points_depth", points_depth);
+}
+
+void QCalibrationApp::loadPresets()
+{
+
+    cv::FileStorage fs(m_impl->preset_filename, cv::FileStorage::READ);
+    fs["H1"] >> m_impl->H1;
+    fs["H2"] >> m_impl->H2;
+    fs["min_depth"] >> m_impl->min_depth;
+    fs["max_depth"] >> m_impl->max_depth;
+
+    cv::Mat points_box, points_mire, points_depth;
+    fs["points_box"] >> points_box;
+    fs["points_mire"] >> points_mire;
+    fs["points_depth"] >> points_depth;
+
+    for (int i = 0; i < 4; ++i)
+    {
+        m_impl->m_control_box[i]->setPos(points_box.at<float>(i, 0) - CONTROL_SIZE / 2, points_box.at<float>(i, 1) - CONTROL_SIZE / 2);
+        m_impl->m_control_mire[i]->setPos(points_mire.at<float>(i, 0) - CONTROL_SIZE / 2, points_mire.at<float>(i, 1) - CONTROL_SIZE / 2);
+    }
+    for (int i = 0; i < 2; ++i)
+    {
+        m_impl->m_control_depth[i]->setPos(points_depth.at<float>(i, 0) - CONTROL_SIZE / 2, points_depth.at<float>(i, 1) - CONTROL_SIZE / 2);
+    }
+}
+
+void QCalibrationApp::setPresetName(std::string_view filename)
+{
+    m_impl->preset_filename = filename;
+}
 
 
 void QCalibrationApp::peek_frame()
@@ -307,6 +365,11 @@ QCalibrationApp::QCalibrationApp(QWidget* parent) : QMainWindow(parent)
     auto depth_calibration_button = new QPushButton("Calibrate Depth");
     // Mirror the output
     auto mirror_button = new QCheckBox("Mirror");
+    // Save presets button
+    auto save_presets_button = new QPushButton("Save Presets");
+    // Load presets button
+    auto load_presets_button = new QPushButton("Load Presets");
+
 
     toolbar->addWidget(m_impl->m_output_choice);
     toolbar->addWidget(m_impl->m_output_depth);
@@ -314,6 +377,8 @@ QCalibrationApp::QCalibrationApp(QWidget* parent) : QMainWindow(parent)
     toolbar->addWidget(zoom_slider); 
     toolbar->addWidget(depth_calibration_button);
     toolbar->addWidget(mirror_button);
+    toolbar->addWidget(save_presets_button);
+    toolbar->addWidget(load_presets_button);
 
 
 
@@ -329,6 +394,8 @@ QCalibrationApp::QCalibrationApp(QWidget* parent) : QMainWindow(parent)
         m_impl->mirror_output = checked;
         recompute_homography();
     });
+    connect(save_presets_button, &QPushButton::clicked, this, (void(QCalibrationApp::*)()) &QCalibrationApp::savePresets);
+    connect(load_presets_button, &QPushButton::clicked, this, (void(QCalibrationApp::*)()) &QCalibrationApp::loadPresets);
 
 
     m_impl->capture.start();
