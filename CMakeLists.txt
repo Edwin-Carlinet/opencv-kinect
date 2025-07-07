@@ -12,7 +12,7 @@ find_package(GLUT REQUIRED)
 find_package(OpenGL REQUIRED)
 find_package(OpenCV REQUIRED COMPONENTS core highgui imgproc calib3d imgcodecs)
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets)
-find_package(pylene REQUIRED)
+
 
 # Pseudo target to OpenNI
 #add_library(OpenNI INTERFACE)
